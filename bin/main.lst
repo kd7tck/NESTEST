@@ -1,0 +1,781 @@
+ca65 V2.18 - Ubuntu 2.19-1
+Main file   : src/main.asm
+Current file: src/main.asm
+
+000000r 1               .segment "HEADER"
+000000r 1  4E 45 53 1A    .byte "NES", $1A ; Magic string for iNES format
+000004r 1  02             .byte $02        ; Number of 16KB PRG-ROM banks (2 banks = 32KB)
+000005r 1  01             .byte $01        ; Number of 8KB CHR-ROM banks (1 bank = 8KB)
+000006r 1  40             .byte $40        ; Mapper type (4 for MMC3), mirroring (lower nibble for mapper, upper for mirroring/submapper)
+000007r 1  00             .byte $00        ; Mapper type, other flags (upper nibble of mapper is in previous byte)
+000008r 1  00 00 00 00    .byte $00, $00, $00, $00, $00, $00, $00, $00 ; Reserved bytes
+00000Cr 1  00 00 00 00
+000010r 1
+000010r 1               ; MMC3 Register Addresses
+000010r 1               MMC3_CMD          = $8000
+000010r 1               MMC3_BANK_SELECT  = $8001
+000010r 1               MMC3_IRQ_LATCH    = $A000
+000010r 1               MMC3_IRQ_RELOAD   = $A001
+000010r 1               MMC3_IRQ_DISABLE  = $C000
+000010r 1               MMC3_IRQ_ENABLE   = $C001
+000010r 1
+000010r 1               ; PPU Register Addresses
+000010r 1               PPUCTRL    = $2000
+000010r 1               PPUMASK    = $2001
+000010r 1               PPUSTATUS  = $2002
+000010r 1               OAMADDR    = $2003
+000010r 1               OAMDATA    = $2004
+000010r 1               PPUSCROLL  = $2005
+000010r 1               PPUADDR    = $2006
+000010r 1               PPUDATA    = $2007
+000010r 1               OAMDMA     = $4014
+000010r 1
+000010r 1               ; Target scanline for MMC3 IRQ
+000010r 1               SCANLINE_SPLIT1 = 80
+000010r 1               SCANLINE_SPLIT2 = 160 ; Target for the second split event
+000010r 1
+000010r 1               ; APU Register Constants
+000010r 1               APU_PULSE1_CTRL   = $4000
+000010r 1               APU_PULSE1_SWEEP  = $4001
+000010r 1               APU_PULSE1_TIMERL = $4002
+000010r 1               APU_PULSE1_TIMERH = $4003
+000010r 1               APU_SND_CHN_CTRL  = $4015
+000010r 1               APU_FRAME_CNT     = $4017
+000010r 1
+000010r 1               .segment "ZEROPAGE"
+000000r 1  xx           layer1_scroll_x: .res 1
+000001r 1  xx           layer1_scroll_y: .res 1
+000002r 1  xx           layer2_scroll_x: .res 1
+000003r 1  xx           layer2_scroll_y: .res 1
+000004r 1  xx           layer3_scroll_x: .res 1
+000005r 1  xx           layer3_scroll_y: .res 1
+000006r 1  xx           irq_split_state: .res 1 ; 0 for first split, 1 for second
+000007r 1  xx           fine_x_scroll_value: .res 1 ; Holds the 3-bit fine X scroll (0-7)
+000008r 1
+000008r 1               ; New 16.16 fixed-point world/main scroll
+000008r 1  xx           main_scroll_x_low:  .res 1 ; Fractional part (16.16, so 8 bits of fraction here)
+000009r 1  xx           main_scroll_x_high: .res 1 ; Integer part (pixel scroll)
+00000Ar 1
+00000Ar 1               ; Player world coordinates (16.16)
+00000Ar 1  xx           player_world_x_low: .res 1
+00000Br 1  xx           player_world_x_high: .res 1
+00000Cr 1  xx           player_world_y_low:   .res 1 ; Player world Y position (16.16)
+00000Dr 1  xx           player_world_y_high:  .res 1
+00000Er 1
+00000Er 1               ; Temporary variables for 16-bit math
+00000Er 1  xx           temp_low: .res 1
+00000Fr 1  xx           temp_high: .res 1
+000010r 1
+000010r 1               ; NMI Synchronization
+000010r 1  xx           NMICount: .res 1
+000011r 1  xx           PrevNMICount: .res 1
+000012r 1
+000012r 1               ; Variables for sprite calculations
+000012r 1  xx           sprite_eff_scroll_low: .res 1
+000013r 1  xx           sprite_eff_scroll_high: .res 1
+000014r 1  xx           sprite_screen_x: .res 1
+000015r 1  xx           oam_index: .res 1 ; To keep track of current OAM buffer offset
+000016r 1  xx           last_beep_scroll_high: .res 1 ; For sound trigger logic
+000017r 1
+000017r 1               .segment "RODATA"
+000000r 1               NUM_FOREGROUND_SPRITES = 2
+000000r 1
+000000r 1               ; Sprite 0 (Layer 4, Factor 1.25)
+000000r 1  00           sprite0_world_x_low:  .byte $00
+000001r 1  50           sprite0_world_x_high: .byte $50  ; Initial world X position
+000002r 1  80           sprite0_y:            .byte $80  ; Screen Y position
+000003r 1  01           sprite0_tile:         .byte $01  ; Tile index from sprites.chr
+000004r 1  00           sprite0_attr:         .byte $00  ; Palette 0, no flip
+000005r 1
+000005r 1               ; Sprite 1 (Layer 5, Factor 1.50)
+000005r 1  00           sprite1_world_x_low:  .byte $00
+000006r 1  70           sprite1_world_x_high: .byte $70  ; Initial world X position
+000007r 1  A0           sprite1_y:            .byte $A0  ; Screen Y position
+000008r 1  02           sprite1_tile:         .byte $02  ; Tile index from sprites.chr
+000009r 1  01           sprite1_attr:         .byte $01  ; Palette 1, no flip
+00000Ar 1
+00000Ar 1               ; Player Sprite Data
+00000Ar 1  00           player_sprite_tile:   .byte $00  ; Tile index for player (e.g., first sprite in sprites.chr)
+00000Br 1  02           player_sprite_attr:   .byte $02  ; Palette 2, no flip
+00000Cr 1
+00000Cr 1  40           PlayerScreenXOffset: .byte 64 ; Player desired screen X position
+00000Dr 1
+00000Dr 1               SampleNametable:
+00000Dr 1  01 01 01 01      .byt $01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01 ; Row 0
+000011r 1  01 01 01 01
+000015r 1  01 01 01 01
+00002Dr 1  02 02 02 02      .byt $02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02,$02 ; Row 1
+000031r 1  02 02 02 02
+000035r 1  02 02 02 02
+00004Dr 1  03 03 03 03      .byt $03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03 ; Row 2
+000051r 1  03 03 03 03
+000055r 1  03 03 03 03
+00006Dr 1               SampleNametable_End: ; Label to mark end for size calculation if needed by loader. (Not used by LoadSmallNametable)
+00006Dr 1
+00006Dr 1  88           ppu_ctrl_value_default: .byte %10001000 ; BG $0000, Sprites $1000, NMI on
+00006Er 1  1E           ppu_mask_value_default: .byte %00011110 ; Show BG/Sprites, Show left column BG/Sprites
+00006Fr 1
+00006Fr 1               .segment "OAM_DATA" ; Mapped to $0200 in nes.cfg
+000000r 1  xx xx xx xx  oam_ram_buffer: .res 256
+000004r 1  xx xx xx xx
+000008r 1  xx xx xx xx
+000100r 1
+000100r 1               .segment "STARTUP"
+000000r 1               RESET:
+000000r 1  78             SEI          ; Disable interrupts
+000001r 1  D8             CLD          ; Disable decimal mode
+000002r 1  A2 40          LDX #$40
+000004r 1  8E 17 40       STX $4017    ; Disable APU frame IRQ
+000007r 1  A2 FF          LDX #$FF
+000009r 1  9A             TXS          ; Set up stack
+00000Ar 1  E8             INX          ; $00 -> $FF
+00000Br 1
+00000Br 1  20 rr rr       JSR MMC3_Init ; Initialize MMC3 Mapper
+00000Er 1  20 rr rr       JSR LoadSmallNametable ; Load initial nametable data
+000011r 1
+000011r 1                 ; Initialize APU
+000011r 1  A9 01          LDA #%00000001    ; Enable Pulse1 channel only
+000013r 1  8D 15 40       STA APU_SND_CHN_CTRL
+000016r 1  A9 40          LDA #%01000000    ; Mode 0: 4-step sequence, APU IRQ disable
+000018r 1  8D 17 40       STA APU_FRAME_CNT
+00001Br 1
+00001Br 1                 ; Initialize scroll positions and counters
+00001Br 1  A9 00          LDA #0
+00001Dr 1  85 rr          STA layer1_scroll_y
+00001Fr 1  85 rr          STA layer2_scroll_y
+000021r 1  85 rr          STA layer3_scroll_y
+000023r 1  85 rr          STA main_scroll_x_low
+000025r 1  85 rr          STA main_scroll_x_high
+000027r 1  85 rr          STA player_world_x_low
+000029r 1  85 rr          STA player_world_x_high
+00002Br 1  85 rr          STA player_world_y_low    ; Init player Y low
+00002Dr 1  A9 78          LDA #120 ; Initial screen Y position for player
+00002Fr 1  85 rr          STA player_world_y_high   ; Init player Y high
+000031r 1  85 rr          STA NMICount
+000033r 1  85 rr          STA PrevNMICount
+000035r 1  85 rr          STA fine_x_scroll_value ; Initialize fine_x_scroll to 0
+000037r 1  A9 FF          LDA #$FF
+000039r 1  85 rr          STA last_beep_scroll_high ; Initialize for sound trigger
+00003Br 1
+00003Br 1               VBLANKWAIT1:       ; Wait for vblank to make sure PPU is ready
+00003Br 1  2C 02 20       BIT $2002
+00003Er 1  10 FB          BPL VBLANKWAIT1
+000040r 1
+000040r 1               CLRMEM:
+000040r 1  A9 00          LDA #$00
+000042r 1  95 00          STA $0000, x
+000044r 1  9D 00 01       STA $0100, x
+000047r 1  9D 00 02       STA $0200, x
+00004Ar 1  9D 00 03       STA $0300, x
+00004Dr 1  9D 00 04       STA $0400, x
+000050r 1  9D 00 05       STA $0500, x
+000053r 1  9D 00 06       STA $0600, x
+000056r 1  9D 00 07       STA $0700, x
+000059r 1  E8             INX
+00005Ar 1  D0 E4          BNE CLRMEM
+00005Cr 1
+00005Cr 1               VBLANKWAIT2:      ; Wait for vblank again
+00005Cr 1  2C 02 20       BIT $2002
+00005Fr 1  10 FB          BPL VBLANKWAIT2
+000061r 1
+000061r 1               Palette:
+000061r 1  AD 02 20       LDA $2002     ; Read PPUSTATUS to reset PPU address latch
+000064r 1  A9 3F          LDA #$3F
+000066r 1  8D 06 20       STA $2006     ; Point PPUADDR to $3F00 (high byte)
+000069r 1  A9 00          LDA #$00
+00006Br 1  8D 06 20       STA $2006     ; Point PPUADDR to $3F00 (low byte)
+00006Er 1
+00006Er 1                 ; Universal Background + BG Palette 0
+00006Er 1  A9 0F          LDA #$0F ; $3F00: Universal Background (Black)
+000070r 1  8D 07 20       STA $2007
+000073r 1  A9 11          LDA #$11 ; $3F01: BG P0C1 (Dark Blue)
+000075r 1  8D 07 20       STA $2007
+000078r 1  A9 21          LDA #$21 ; $3F02: BG P0C2 (Blue)
+00007Ar 1  8D 07 20       STA $2007
+00007Dr 1  A9 31          LDA #$31 ; $3F03: BG P0C3 (Light Blue)
+00007Fr 1  8D 07 20       STA $2007
+000082r 1
+000082r 1                 ; BG Palette 1
+000082r 1  A9 0F          LDA #$0F ; $3F04: Mirror of $3F00 (Black)
+000084r 1  8D 07 20       STA $2007
+000087r 1  A9 17          LDA #$17 ; $3F05: BG P1C1 (Dark Red)
+000089r 1  8D 07 20       STA $2007
+00008Cr 1  A9 27          LDA #$27 ; $3F06: BG P1C2 (Red)
+00008Er 1  8D 07 20       STA $2007
+000091r 1  A9 37          LDA #$37 ; $3F07: BG P1C3 (Light Red)
+000093r 1  8D 07 20       STA $2007
+000096r 1
+000096r 1                 ; BG Palette 2
+000096r 1  A9 0F          LDA #$0F ; $3F08: Mirror of $3F00 (Black)
+000098r 1  8D 07 20       STA $2007
+00009Br 1  A9 19          LDA #$19 ; $3F09: BG P2C1 (Dark Green)
+00009Dr 1  8D 07 20       STA $2007
+0000A0r 1  A9 29          LDA #$29 ; $3F0A: BG P2C2 (Green)
+0000A2r 1  8D 07 20       STA $2007
+0000A5r 1  A9 39          LDA #$39 ; $3F0B: BG P2C3 (Light Green)
+0000A7r 1  8D 07 20       STA $2007
+0000AAr 1
+0000AAr 1                 ; BG Palette 3
+0000AAr 1  A9 0F          LDA #$0F ; $3F0C: Mirror of $3F00 (Black)
+0000ACr 1  8D 07 20       STA $2007
+0000AFr 1  A9 16          LDA #$16 ; $3F0D: BG P3C1 (Dark Yellow/Brown)
+0000B1r 1  8D 07 20       STA $2007
+0000B4r 1  A9 26          LDA #$26 ; $3F0E: BG P3C2 (Yellow)
+0000B6r 1  8D 07 20       STA $2007
+0000B9r 1  A9 36          LDA #$36 ; $3F0F: BG P3C3 (Light Yellow)
+0000BBr 1  8D 07 20       STA $2007
+0000BEr 1
+0000BEr 1                 ; Sprite Palette 0
+0000BEr 1  A9 0F          LDA #$0F ; $3F10: SP P0C0 (Transparent - use Universal BG)
+0000C0r 1  8D 07 20       STA $2007
+0000C3r 1  A9 11          LDA #$11 ; $3F11: SP P0C1 (Dark Blue)
+0000C5r 1  8D 07 20       STA $2007
+0000C8r 1  A9 21          LDA #$21 ; $3F12: SP P0C2 (Blue)
+0000CAr 1  8D 07 20       STA $2007
+0000CDr 1  A9 31          LDA #$31 ; $3F13: SP P0C3 (Light Blue)
+0000CFr 1  8D 07 20       STA $2007
+0000D2r 1
+0000D2r 1                 ; Sprite Palette 1
+0000D2r 1  A9 0F          LDA #$0F ; $3F14: SP P1C0 (Transparent - use Universal BG)
+0000D4r 1  8D 07 20       STA $2007
+0000D7r 1  A9 17          LDA #$17 ; $3F15: SP P1C1 (Dark Red)
+0000D9r 1  8D 07 20       STA $2007
+0000DCr 1  A9 27          LDA #$27 ; $3F16: SP P1C2 (Red)
+0000DEr 1  8D 07 20       STA $2007
+0000E1r 1  A9 37          LDA #$37 ; $3F17: SP P1C3 (Light Red)
+0000E3r 1  8D 07 20       STA $2007
+0000E6r 1
+0000E6r 1                 ; Sprite Palette 2
+0000E6r 1  A9 0F          LDA #$0F ; $3F18: SP P2C0 (Transparent - use Universal BG)
+0000E8r 1  8D 07 20       STA $2007
+0000EBr 1  A9 19          LDA #$19 ; $3F19: SP P2C1 (Dark Green)
+0000EDr 1  8D 07 20       STA $2007
+0000F0r 1  A9 29          LDA #$29 ; $3F1A: SP P2C2 (Green)
+0000F2r 1  8D 07 20       STA $2007
+0000F5r 1  A9 39          LDA #$39 ; $3F1B: SP P2C3 (Light Green)
+0000F7r 1  8D 07 20       STA $2007
+0000FAr 1
+0000FAr 1                 ; Sprite Palette 3
+0000FAr 1  A9 0F          LDA #$0F ; $3F1C: SP P3C0 (Transparent - use Universal BG)
+0000FCr 1  8D 07 20       STA $2007
+0000FFr 1  A9 16          LDA #$16 ; $3F1D: SP P3C1 (Dark Yellow/Brown)
+000101r 1  8D 07 20       STA $2007
+000104r 1  A9 26          LDA #$26 ; $3F1E: SP P3C2 (Yellow)
+000106r 1  8D 07 20       STA $2007
+000109r 1  A9 36          LDA #$36 ; $3F1F: SP P3C3 (Light Yellow)
+00010Br 1  8D 07 20       STA $2007
+00010Er 1
+00010Er 1               .segment "CODE" ; Or PRG_SWAP_A as per nes.cfg for main code
+000000r 1
+000000r 1               MainLoop:
+000000r 1                 ; --- Simulate Input: Increment scroll (e.g., holding Right) ---
+000000r 1  E6 rr          INC main_scroll_x_low
+000002r 1  D0 02          BNE SkipIncHigh
+000004r 1  E6 rr          INC main_scroll_x_high
+000006r 1               SkipIncHigh:
+000006r 1
+000006r 1                 ; Copy main_scroll to player_world_x (assuming player movement drives scroll)
+000006r 1  A5 rr          LDA main_scroll_x_low
+000008r 1  85 rr          STA player_world_x_low
+00000Ar 1  A5 rr          LDA main_scroll_x_high
+00000Cr 1  85 rr          STA player_world_x_high
+00000Er 1
+00000Er 1                 ; --- Calculate Per-Layer Scroll Positions ---
+00000Er 1  20 rr rr       JSR UpdateLayerScrolls
+000011r 1
+000011r 1                 ; --- Update Sprite Logic ---
+000011r 1  20 rr rr       JSR UpdateSprites
+000014r 1
+000014r 1                 ; --- Example Sound Trigger ---
+000014r 1  A5 rr          LDA main_scroll_x_high
+000016r 1  C9 0A          CMP #10
+000018r 1  D0 11          BNE SkipBeep
+00001Ar 1  A5 rr          LDA main_scroll_x_low ; Check low byte too for more precise trigger
+00001Cr 1  D0 0D          BNE SkipBeep
+00001Er 1                   ; Check if already beeped for this specific high scroll value
+00001Er 1  A5 rr            LDA last_beep_scroll_high
+000020r 1  C5 rr            CMP main_scroll_x_high
+000022r 1  F0 07            BEQ SkipBeep ; Already beeped
+000024r 1
+000024r 1  20 rr rr         JSR PlayBeepSound
+000027r 1  A5 rr            LDA main_scroll_x_high
+000029r 1  85 rr            STA last_beep_scroll_high ; Remember this scroll value
+00002Br 1               SkipBeep:
+00002Br 1
+00002Br 1                 ; --- Other game logic would go here (player updates, enemy AI, collisions) ---
+00002Br 1
+00002Br 1                 ; --- Wait for VBlank (NMI) ---
+00002Br 1               WaitForNMI:
+00002Br 1  A5 rr          LDA NMICount         ; Assuming NMICount is a variable incremented by NMI handler
+00002Dr 1  85 rr          STA PrevNMICount
+00002Fr 1               WaitLoop:
+00002Fr 1  A5 rr          LDA NMICount
+000031r 1  C5 rr          CMP PrevNMICount
+000033r 1  F0 FA          BEQ WaitLoop         ; Loop until NMICount changes
+000035r 1
+000035r 1  4C rr rr       JMP MainLoop
+000038r 1
+000038r 1               ; --- Subroutine to Calculate Layer Scrolls ---
+000038r 1               UpdateLayerScrolls:
+000038r 1  48             PHA ; Preserve A
+000039r 1  8A             TXA
+00003Ar 1  48             PHA ; Preserve X
+00003Br 1  98             TYA
+00003Cr 1  48             PHA ; Preserve Y
+00003Dr 1
+00003Dr 1                 ; Calculate Fine X scroll (top 3 bits of main_scroll_x_low)
+00003Dr 1                 ; This fine_x_scroll is shared by all layers for horizontal alignment to main view.
+00003Dr 1  A5 rr          LDA main_scroll_x_low
+00003Fr 1  4A             LSR A ; bit 7 to carry
+000040r 1  4A             LSR A ; bit 6 to carry
+000041r 1  4A             LSR A ; bit 5 to carry
+000042r 1  4A             LSR A ; bit 4 to carry
+000043r 1  4A             LSR A ; bit 3 to carry. Now A = bits 7,6,5 of original main_scroll_x_low (shifted to bits 0,1,2)
+000044r 1                 ; AND #%00000111 ; Ensure it's 0-7, LSRs already do this if original was byte.
+000044r 1  85 rr          STA fine_x_scroll_value ; Store the 3-bit fine X scroll (0-7)
+000046r 1
+000046r 1                 ; Layer 3 Scroll (Factor 1.0)
+000046r 1                 ; Coarse X scroll is main_scroll_x_high
+000046r 1                 ; Combined X value for $2005 = (main_scroll_x_high << 3) | fine_x_scroll_value
+000046r 1                 ; This interpretation of how to use fine_x_scroll_value with coarse scroll
+000046r 1                 ; is specific to the problem description's implied NMI/IRQ scroll write method.
+000046r 1  A5 rr          LDA main_scroll_x_high ; Coarse X part
+000048r 1  0A             ASL A ; x2
+000049r 1  0A             ASL A ; x4
+00004Ar 1  0A             ASL A ; x8 (now coarse X is in bits D3-D7)
+00004Br 1  05 rr          ORA fine_x_scroll_value
+00004Dr 1  85 rr          STA layer3_scroll_x
+00004Fr 1
+00004Fr 1                 ; Layer 1 Scroll (Factor 0.5)
+00004Fr 1                 ; scroll1_coarse = main_scroll_x_high >> 1
+00004Fr 1  A5 rr          LDA main_scroll_x_high
+000051r 1  4A             LSR A                   ; Coarse X / 2
+000052r 1  85 rr          STA temp_high           ; Store coarse X for layer 1
+000054r 1                 ; Combined X value = (temp_high << 3) | fine_x_scroll_value
+000054r 1  A5 rr          LDA temp_high
+000056r 1  0A             ASL A ; x2
+000057r 1  0A             ASL A ; x4
+000058r 1  0A             ASL A ; x8
+000059r 1  05 rr          ORA fine_x_scroll_value
+00005Br 1  85 rr          STA layer1_scroll_x
+00005Dr 1
+00005Dr 1                 ; Layer 2 Scroll (Factor 0.75)
+00005Dr 1                 ; scroll2_coarse = (main_scroll_x_high >> 1) + (main_scroll_x_high >> 2)
+00005Dr 1  A5 rr          LDA main_scroll_x_high
+00005Fr 1  85 rr          STA temp_high           ; temp_high = main_scroll_x_high
+000061r 1  46 rr          LSR temp_high           ; temp_high = main_scroll_x_high >> 1 (val_a)
+000063r 1  A5 rr          LDA main_scroll_x_high
+000065r 1  4A             LSR A                   ; A = main_scroll_x_high >> 1
+000066r 1  4A             LSR A                   ; A = main_scroll_x_high >> 2 (val_b)
+000067r 1  18             CLC
+000068r 1  65 rr          ADC temp_high           ; A = val_a + val_b (coarse X for layer 2)
+00006Ar 1  85 rr          STA temp_high           ; Store coarse X for layer 2
+00006Cr 1                 ; Combined X value = (temp_high << 3) | fine_x_scroll_value
+00006Cr 1  A5 rr          LDA temp_high
+00006Er 1  0A             ASL A ; x2
+00006Fr 1  0A             ASL A ; x4
+000070r 1  0A             ASL A ; x8
+000071r 1  05 rr          ORA fine_x_scroll_value
+000073r 1  85 rr          STA layer2_scroll_x
+000075r 1
+000075r 1                 ; Y scrolls are static, initialized in RESET.
+000075r 1
+000075r 1  68             PLA ; Restore Y
+000076r 1  A8             TAY
+000077r 1  68             PLA ; Restore X
+000078r 1  AA             TAX
+000079r 1  68             PLA ; Restore A
+00007Ar 1  60             RTS
+00007Br 1
+00007Br 1               PlayBeepSound:
+00007Br 1  48             PHA
+00007Cr 1
+00007Cr 1                 ; Setup Pulse 1 for a short beep
+00007Cr 1                 ; $4000: DDLC VVVV (Duty, EnvLoop/LenCtrHalt, ConstVol, Vol/EnvPeriod)
+00007Cr 1  A9 5F          LDA #%01011111  ; Duty 25% (01), Length Ctr Halt OFF, Const Vol ON, Volume 15 (max)
+00007Er 1  8D 00 40       STA APU_PULSE1_CTRL
+000081r 1
+000081r 1                 ; $4001: EPPP NSSS (Sweep enable, Period, Negate, Shift)
+000081r 1  A9 08          LDA #%00001000  ; Sweep off
+000083r 1  8D 01 40       STA APU_PULSE1_SWEEP
+000086r 1
+000086r 1                 ; $4002: TTTT TTTT (Timer low 8 bits)
+000086r 1  A9 A8          LDA #$A8        ; Timer value for a mid-range note
+000088r 1  8D 02 40       STA APU_PULSE1_TIMERL
+00008Br 1
+00008Br 1                 ; $4003: LLLL LTTT (Length counter load, Timer high 3 bits)
+00008Br 1  A9 11          LDA #%00010001  ; Length counter load (e.g., $00010 = table val 20), Timer high (for $1A8 -> $01)
+00008Dr 1  8D 03 40       STA APU_PULSE1_TIMERH ; This write also triggers the sound
+000090r 1
+000090r 1  68             PLA
+000091r 1  60             RTS
+000092r 1
+000092r 1               LoadSmallNametable:
+000092r 1  48             PHA
+000093r 1  8A             TXA
+000094r 1  48             PHA
+000095r 1
+000095r 1  AD 02 20       LDA PPUSTATUS
+000098r 1  A9 20          LDA #$20 ; Nametable 0 address $2000
+00009Ar 1  8D 06 20       STA PPUADDR
+00009Dr 1  A9 00          LDA #$00
+00009Fr 1  8D 06 20       STA PPUADDR
+0000A2r 1
+0000A2r 1  A2 00          LDX #$00
+0000A4r 1               LoadSmallLoop:
+0000A4r 1  BD rr rr       LDA SampleNametable, X
+0000A7r 1  8D 07 20       STA PPUDATA
+0000AAr 1  E8             INX
+0000ABr 1  E0 60          CPX #(32*3) ; Load 3 rows = 96 bytes
+0000ADr 1  D0 F5          BNE LoadSmallLoop
+0000AFr 1
+0000AFr 1  68             PLA
+0000B0r 1  AA             TAX
+0000B1r 1  68             PLA
+0000B2r 1  60             RTS
+0000B3r 1
+0000B3r 1               UpdateSprites:
+0000B3r 1  48             PHA
+0000B4r 1  8A             TXA
+0000B5r 1  48             PHA
+0000B6r 1  98             TYA
+0000B7r 1  48             PHA
+0000B8r 1
+0000B8r 1  A2 00          LDX #$00
+0000BAr 1  86 rr          STX oam_index ; Start populating oam_ram_buffer from its beginning
+0000BCr 1
+0000BCr 1                 ; --- Process Player Sprite (Layer 3, F=1.0) ---
+0000BCr 1                 ; Player's effective scroll IS main_scroll (Factor 1.0)
+0000BCr 1  A5 rr          LDA main_scroll_x_low
+0000BEr 1  85 rr          STA sprite_eff_scroll_low
+0000C0r 1  A5 rr          LDA main_scroll_x_high
+0000C2r 1  85 rr          STA sprite_eff_scroll_high
+0000C4r 1
+0000C4r 1                 ; Screen X = player_world_x_high - sprite_eff_scroll_high
+0000C4r 1                 ; (player_world_x is currently set to main_scroll_x in MainLoop)
+0000C4r 1                 ; Screen X = (player_world_x_high - main_scroll_x_high) + PlayerScreenXOffset
+0000C4r 1                 ; Since player_world_x_high = main_scroll_x_high, this simplifies to PlayerScreenXOffset
+0000C4r 1  A5 rr          LDA player_world_x_high
+0000C6r 1  38             SEC
+0000C7r 1  E5 rr          SBC sprite_eff_scroll_high ; sprite_eff_scroll_high is main_scroll_x_high for player
+0000C9r 1  18             CLC                        ; Result of SBC is (player_world_x_high - main_scroll_x_high), which is 0
+0000CAr 1  6D rr rr       ADC PlayerScreenXOffset    ; So, sprite_screen_x becomes PlayerScreenXOffset
+0000CDr 1  85 rr          STA sprite_screen_x
+0000CFr 1
+0000CFr 1                 ; Populate OAM Buffer for Player Sprite
+0000CFr 1  A4 rr          LDY oam_index
+0000D1r 1  A5 rr          LDA player_world_y_high ; Using the high byte of world Y as screen Y
+0000D3r 1  99 rr rr       STA oam_ram_buffer, Y
+0000D6r 1  C8             INY
+0000D7r 1  AD rr rr       LDA player_sprite_tile
+0000DAr 1  99 rr rr       STA oam_ram_buffer, Y
+0000DDr 1  C8             INY
+0000DEr 1  AD rr rr       LDA player_sprite_attr
+0000E1r 1  99 rr rr       STA oam_ram_buffer, Y
+0000E4r 1  C8             INY
+0000E5r 1  A5 rr          LDA sprite_screen_x       ; Calculated screen X
+0000E7r 1  99 rr rr       STA oam_ram_buffer, Y
+0000EAr 1  C8             INY
+0000EBr 1  84 rr          STY oam_index
+0000EDr 1
+0000EDr 1                 ; --- Process Sprite 0 (Layer 4, F=1.25) ---
+0000EDr 1                 ; Calculate effective scroll: main_scroll + (main_scroll >> 2)
+0000EDr 1  A5 rr          LDA main_scroll_x_low
+0000EFr 1  85 rr          STA temp_low
+0000F1r 1  A5 rr          LDA main_scroll_x_high
+0000F3r 1  85 rr          STA temp_high
+0000F5r 1
+0000F5r 1                 ; temp = main_scroll >> 2
+0000F5r 1  46 rr          LSR temp_high
+0000F7r 1  66 rr          ROR temp_low
+0000F9r 1  46 rr          LSR temp_high
+0000FBr 1  66 rr          ROR temp_low          ; Now temp_high, temp_low = main_scroll >> 2
+0000FDr 1
+0000FDr 1  18             CLC
+0000FEr 1  A5 rr          LDA main_scroll_x_low
+000100r 1  65 rr          ADC temp_low
+000102r 1  85 rr          STA sprite_eff_scroll_low
+000104r 1  A5 rr          LDA main_scroll_x_high
+000106r 1  65 rr          ADC temp_high
+000108r 1  85 rr          STA sprite_eff_scroll_high ; sprite_eff_scroll = main_scroll * 1.25
+00010Ar 1
+00010Ar 1                 ; Screen X = sprite0_world_x_high - sprite_eff_scroll_high
+00010Ar 1  AD rr rr       LDA sprite0_world_x_high
+00010Dr 1  38             SEC
+00010Er 1  E5 rr          SBC sprite_eff_scroll_high
+000110r 1  85 rr          STA sprite_screen_x
+000112r 1
+000112r 1                 ; Populate OAM Buffer for sprite 0
+000112r 1  A4 rr          LDY oam_index
+000114r 1  AD rr rr       LDA sprite0_y
+000117r 1  99 rr rr       STA oam_ram_buffer, Y ; Y position
+00011Ar 1  C8             INY
+00011Br 1  AD rr rr       LDA sprite0_tile
+00011Er 1  99 rr rr       STA oam_ram_buffer, Y ; Tile Index
+000121r 1  C8             INY
+000122r 1  AD rr rr       LDA sprite0_attr
+000125r 1  99 rr rr       STA oam_ram_buffer, Y ; Attributes
+000128r 1  C8             INY
+000129r 1  A5 rr          LDA sprite_screen_x
+00012Br 1  99 rr rr       STA oam_ram_buffer, Y ; X position
+00012Er 1  C8             INY
+00012Fr 1  84 rr          STY oam_index
+000131r 1
+000131r 1                 ; --- Process Sprite 1 (Layer 5, F=1.50) ---
+000131r 1                 ; Calculate effective scroll: main_scroll + (main_scroll >> 1)
+000131r 1  A5 rr          LDA main_scroll_x_low
+000133r 1  85 rr          STA temp_low
+000135r 1  A5 rr          LDA main_scroll_x_high
+000137r 1  85 rr          STA temp_high
+000139r 1
+000139r 1                 ; temp = main_scroll >> 1
+000139r 1  46 rr          LSR temp_high
+00013Br 1  66 rr          ROR temp_low          ; Now temp_high, temp_low = main_scroll >> 1
+00013Dr 1
+00013Dr 1  18             CLC
+00013Er 1  A5 rr          LDA main_scroll_x_low
+000140r 1  65 rr          ADC temp_low
+000142r 1  85 rr          STA sprite_eff_scroll_low
+000144r 1  A5 rr          LDA main_scroll_x_high
+000146r 1  65 rr          ADC temp_high
+000148r 1  85 rr          STA sprite_eff_scroll_high ; sprite_eff_scroll = main_scroll * 1.50
+00014Ar 1
+00014Ar 1                 ; Screen X = sprite1_world_x_high - sprite_eff_scroll_high
+00014Ar 1  AD rr rr       LDA sprite1_world_x_high
+00014Dr 1  38             SEC
+00014Er 1  E5 rr          SBC sprite_eff_scroll_high
+000150r 1  85 rr          STA sprite_screen_x
+000152r 1
+000152r 1                 ; Populate OAM Buffer for sprite 1
+000152r 1  A4 rr          LDY oam_index
+000154r 1  AD rr rr       LDA sprite1_y
+000157r 1  99 rr rr       STA oam_ram_buffer, Y
+00015Ar 1  C8             INY
+00015Br 1  AD rr rr       LDA sprite1_tile
+00015Er 1  99 rr rr       STA oam_ram_buffer, Y
+000161r 1  C8             INY
+000162r 1  AD rr rr       LDA sprite1_attr
+000165r 1  99 rr rr       STA oam_ram_buffer, Y
+000168r 1  C8             INY
+000169r 1  A5 rr          LDA sprite_screen_x
+00016Br 1  99 rr rr       STA oam_ram_buffer, Y
+00016Er 1  C8             INY
+00016Fr 1  84 rr          STY oam_index
+000171r 1
+000171r 1                 ; --- Hide remaining sprites ---
+000171r 1                 ; Fill rest of OAM with Y > 239 to hide them
+000171r 1  A9 F8          LDA #$F8 ; Screen Y position to hide sprites (e.g. 248)
+000173r 1               HideLoop:
+000173r 1  C0 FC          CPY #252 ; Process up to OAM index 251 (for 63 sprites total, leaving last sprite for safety)
+000175r 1                          ; Max OAM is 256 bytes (64 sprites). Loop until Y is 252, so we fill sprite entries up to 62.
+000175r 1                          ; Sprite 63 (indices 252, 253, 254, 255) will be the last one potentially set by this loop.
+000175r 1  B0 13          BCS EndHideLoop ; If Y >= 252, branch to end. BCS is equivalent to BGE for unsigned.
+000177r 1  99 rr rr       STA oam_ram_buffer, Y
+00017Ar 1  C8             INY
+00017Br 1  99 rr rr       STA oam_ram_buffer, Y ; Tile (can be same hidden Y)
+00017Er 1  C8             INY
+00017Fr 1  99 rr rr       STA oam_ram_buffer, Y ; Attributes (can be same hidden Y)
+000182r 1  C8             INY
+000183r 1  99 rr rr       STA oam_ram_buffer, Y ; X (can be same hidden Y)
+000186r 1  C8             INY
+000187r 1  4C rr rr       JMP HideLoop
+00018Ar 1               EndHideLoop:
+00018Ar 1
+00018Ar 1  68             PLA
+00018Br 1  A8             TAY
+00018Cr 1  68             PLA
+00018Dr 1  AA             TAX
+00018Er 1  68             PLA
+00018Fr 1  60             RTS
+000190r 1
+000190r 1               MMC3_Init:
+000190r 1  48             PHA             ; Preserve A
+000191r 1
+000191r 1                 ; Disable MMC3 IRQs initially
+000191r 1  A9 00          LDA #$00        ; Value doesn't matter for disabling
+000193r 1  8D 00 C0       STA MMC3_IRQ_DISABLE
+000196r 1
+000196r 1                 ; Set default PRG banking mode (Mode 0: $8000 swappable, $A000 swappable, $C000 fixed, $E000 fixed)
+000196r 1                 ; And default CHR banking mode (Mode 0: two 2KB banks at $0000-$07FF and $0800-$0FFF, four 1KB banks at $1000-$1FFF)
+000196r 1  A9 00          LDA #%00000000  ; Bits 7,6 for PRG mode (00 is mode 0). Bits 5-0 for CHR A12 inversion.
+000198r 1  8D 00 80       STA MMC3_CMD
+00019Br 1
+00019Br 1                 ; Select initial PRG bank 0 for the $8000-$9FFF slot (R6):
+00019Br 1  A9 06          LDA #$06        ; Select R6 register (for $8000-$9FFF)
+00019Dr 1  8D 00 80       STA MMC3_CMD
+0001A0r 1  A9 00          LDA #$00        ; Bank 0
+0001A2r 1  8D 01 80       STA MMC3_BANK_SELECT
+0001A5r 1
+0001A5r 1                 ; Select initial PRG bank 1 for the $A000-$BFFF slot (R7):
+0001A5r 1  A9 07          LDA #$07        ; Select R7 register (for $A000-$BFFF)
+0001A7r 1  8D 00 80       STA MMC3_CMD
+0001AAr 1  A9 01          LDA #$01        ; Bank 1
+0001ACr 1  8D 01 80       STA MMC3_BANK_SELECT
+0001AFr 1
+0001AFr 1                 ; Note: The fixed bank at $E000-$FFFF is automatically the last physical bank.
+0001AFr 1                 ; The bank at $C000-$DFFF is automatically the second to last physical bank in this PRG mode.
+0001AFr 1                 ; RESET code (including this routine) should be in the fixed upper bank ($E000-$FFFF).
+0001AFr 1
+0001AFr 1                 ; Initialize IRQ split state
+0001AFr 1  A9 00          LDA #$00
+0001B1r 1  85 rr          STA irq_split_state
+0001B3r 1
+0001B3r 1                 ; --- CHR Banking Setup for MMC3 Mode 0 ---
+0001B3r 1                 ; PPU $0000-$0FFF for BG tiles (from CHR banks 0-3)
+0001B3r 1                 ; PPU $1000-$1FFF for Sprite tiles (from CHR banks 4-7)
+0001B3r 1
+0001B3r 1                 ; Set $8000 CMD register to select CHR regs R0-R5, then $8001 for bank number.
+0001B3r 1                 ; CHR A12 inversion bits in $8000 are 0 for now (normal mapping).
+0001B3r 1
+0001B3r 1                 ; R0: PPU $0000-$07FF (2KB), map to CHR physical bank 0 (which means banks 0 & 1 if 1KB granularity)
+0001B3r 1  A9 00          LDA #%00000000  ; Select R0, PRG Mode 0, CHR A12 Inversion bits all 0
+0001B5r 1  8D 00 80       STA MMC3_CMD
+0001B8r 1  A9 00          LDA #$00        ; CHR data bank 0 (for the 2KB page starting at $0000)
+0001BAr 1  8D 01 80       STA MMC3_BANK_SELECT
+0001BDr 1
+0001BDr 1                 ; R1: PPU $0800-$0FFF (2KB), map to CHR physical bank 2 (banks 2 & 3 if 1KB granularity)
+0001BDr 1  A9 01          LDA #%00000001  ; Select R1
+0001BFr 1  8D 00 80       STA MMC3_CMD
+0001C2r 1  A9 02          LDA #$02        ; CHR data bank 2 (for the 2KB page starting at $0800)
+0001C4r 1  8D 01 80       STA MMC3_BANK_SELECT
+0001C7r 1
+0001C7r 1                 ; R2: PPU $1000-$13FF (1KB), map to CHR physical bank 4
+0001C7r 1  A9 02          LDA #%00000010  ; Select R2
+0001C9r 1  8D 00 80       STA MMC3_CMD
+0001CCr 1  A9 04          LDA #$04        ; CHR data bank 4
+0001CEr 1  8D 01 80       STA MMC3_BANK_SELECT
+0001D1r 1
+0001D1r 1                 ; R3: PPU $1400-$17FF (1KB), map to CHR physical bank 5
+0001D1r 1  A9 03          LDA #%00000011  ; Select R3
+0001D3r 1  8D 00 80       STA MMC3_CMD
+0001D6r 1  A9 05          LDA #$05        ; CHR data bank 5
+0001D8r 1  8D 01 80       STA MMC3_BANK_SELECT
+0001DBr 1
+0001DBr 1                 ; R4: PPU $1800-$1BFF (1KB), map to CHR physical bank 6
+0001DBr 1  A9 04          LDA #%00000100  ; Select R4
+0001DDr 1  8D 00 80       STA MMC3_CMD
+0001E0r 1  A9 06          LDA #$06        ; CHR data bank 6
+0001E2r 1  8D 01 80       STA MMC3_BANK_SELECT
+0001E5r 1
+0001E5r 1                 ; R5: PPU $1C00-$1FFF (1KB), map to CHR physical bank 7
+0001E5r 1  A9 05          LDA #%00000101  ; Select R5
+0001E7r 1  8D 00 80       STA MMC3_CMD
+0001EAr 1  A9 07          LDA #$07        ; CHR data bank 7
+0001ECr 1  8D 01 80       STA MMC3_BANK_SELECT
+0001EFr 1
+0001EFr 1  68             PLA             ; Restore A
+0001F0r 1  60             RTS
+0001F1r 1
+0001F1r 1               NMI:
+0001F1r 1  48             PHA             ; Push Accumulator
+0001F2r 1  8A             TXA             ; Transfer X to A
+0001F3r 1  48             PHA             ; Push X (as A)
+0001F4r 1  98             TYA             ; Transfer Y to A
+0001F5r 1  48             PHA             ; Push Y (as A)
+0001F6r 1
+0001F6r 1  AD 02 20       LDA PPUSTATUS   ; Read PPU status to reset address latch and acknowledge NMI
+0001F9r 1
+0001F9r 1                 ; --- OAM DMA Transfer ---
+0001F9r 1  A9 rr          LDA #>oam_ram_buffer ; High byte of OAM buffer RAM address (e.g., $02 for $0200)
+0001FBr 1  8D 14 40       STA OAMDMA        ; Writing here initiates DMA transfer from $xx00-$xxFF to OAM
+0001FEr 1                 ; Note: DMA takes ~513 CPU cycles. Subsequent code should account for this.
+0001FEr 1
+0001FEr 1                 ; --- PPU Rendering Setup ---
+0001FEr 1  AD rr rr       LDA ppu_mask_value_default
+000201r 1  8D 01 20       STA PPUMASK
+000204r 1  AD rr rr       LDA ppu_ctrl_value_default
+000207r 1  8D 00 20       STA PPUCTRL       ; Initial PPUCTRL write, NMI enabled.
+00020Ar 1
+00020Ar 1                 ; --- Set Scroll for Layer 1 ---
+00020Ar 1  A5 rr          LDA layer1_scroll_x
+00020Cr 1  8D 05 20       STA PPUSCROLL     ; Write X scroll
+00020Fr 1  A5 rr          LDA layer1_scroll_y
+000211r 1  8D 05 20       STA PPUSCROLL     ; Write Y scroll
+000214r 1
+000214r 1                 ; --- MMC3 IRQ Setup for First Scanline Split ---
+000214r 1  A9 00          LDA #$00
+000216r 1  85 rr          STA irq_split_state      ; Reset for current frame's IRQ sequence
+000218r 1  A9 50          LDA #SCANLINE_SPLIT1 ; Value for the first IRQ (e.g., scanline 80)
+00021Ar 1  8D 00 A0       STA MMC3_IRQ_LATCH   ; Write to IRQ Latch register ($A000)
+00021Dr 1
+00021Dr 1  A9 00          LDA #$00           ; Dummy write, value doesn't matter for reload
+00021Fr 1  8D 01 A0       STA MMC3_IRQ_RELOAD  ; Write to IRQ Reload register ($A001) to arm the counter
+000222r 1
+000222r 1  A9 00          LDA #$00           ; Dummy write, value doesn't matter for enable
+000224r 1  8D 01 C0       STA MMC3_IRQ_ENABLE  ; Write to IRQ Enable register ($C001) to enable MMC3 IRQs
+000227r 1
+000227r 1                 ; --- Music/Sound Update (Placeholder) ---
+000227r 1                 ; JSR UpdateMusic
+000227r 1
+000227r 1  E6 rr          INC NMICount      ; Increment NMI counter for main loop synchronization
+000229r 1
+000229r 1                 ; --- NMI Exit ---
+000229r 1  68             PLA             ; Pull Y (as A)
+00022Ar 1  A8             TAY             ; Transfer A to Y
+00022Br 1  68             PLA             ; Pull X (as A)
+00022Cr 1  AA             TAX             ; Transfer A to X
+00022Dr 1  68             PLA             ; Pull Accumulator
+00022Er 1  40             RTI             ; Return from Interrupt
+00022Fr 1
+00022Fr 1               IRQ:
+00022Fr 1  48             PHA             ; Push Accumulator
+000230r 1  8A             TXA             ; Transfer X to A
+000231r 1  48             PHA             ; Push X (as A)
+000232r 1  98             TYA             ; Transfer Y to A
+000233r 1  48             PHA             ; Push Y (as A)
+000234r 1
+000234r 1                 ; MMC3 IRQ is cleared by the CPU jump, effectively. Re-arm or disable as needed.
+000234r 1
+000234r 1  A5 rr          LDA irq_split_state
+000236r 1  F0 12          BEQ HandleFirstSplit
+000238r 1
+000238r 1               HandleSecondSplit:
+000238r 1                 ; --- This is the IRQ for the second split (e.g., at scanline 160) ---
+000238r 1                 ; Set scroll for Layer 3
+000238r 1  A5 rr          LDA layer3_scroll_x
+00023Ar 1  8D 05 20       STA PPUSCROLL
+00023Dr 1  A5 rr          LDA layer3_scroll_y
+00023Fr 1  8D 05 20       STA PPUSCROLL
+000242r 1
+000242r 1                 ; Disable MMC3 IRQs for the rest of the frame
+000242r 1  A9 00          LDA #$00 ; dummy value
+000244r 1  8D 00 C0       STA MMC3_IRQ_DISABLE
+000247r 1
+000247r 1  4C rr rr       JMP IrqDone
+00024Ar 1
+00024Ar 1               HandleFirstSplit:
+00024Ar 1                 ; --- This is the IRQ for the first split (e.g., at scanline 80) ---
+00024Ar 1                 ; Set scroll for Layer 2
+00024Ar 1  A5 rr          LDA layer2_scroll_x
+00024Cr 1  8D 05 20       STA PPUSCROLL
+00024Fr 1  A5 rr          LDA layer2_scroll_y
+000251r 1  8D 05 20       STA PPUSCROLL
+000254r 1
+000254r 1                 ; Set up MMC3 IRQ for the second split
+000254r 1  A9 50          LDA #(SCANLINE_SPLIT2 - SCANLINE_SPLIT1) ; Latch value (scanlines from current to next IRQ)
+000256r 1  8D 00 A0       STA MMC3_IRQ_LATCH
+000259r 1
+000259r 1  A9 00          LDA #$00 ; dummy value
+00025Br 1  8D 01 A0       STA MMC3_IRQ_RELOAD  ; Arm the counter
+00025Er 1
+00025Er 1  A9 00          LDA #$00 ; dummy value
+000260r 1  8D 01 C0       STA MMC3_IRQ_ENABLE  ; Enable MMC3 IRQs
+000263r 1
+000263r 1                 ; Update state for next IRQ
+000263r 1  E6 rr          INC irq_split_state  ; irq_split_state becomes 1
+000265r 1
+000265r 1               IrqDone:
+000265r 1  68             PLA             ; Pull Y (as A)
+000266r 1  A8             TAY             ; Transfer A to Y
+000267r 1  68             PLA             ; Pull X (as A)
+000268r 1  AA             TAX             ; Transfer A to X
+000269r 1  68             PLA             ; Pull Accumulator
+00026Ar 1  40             RTI             ; Return from Interrupt
+00026Br 1
+00026Br 1               .segment "CHRDATA"
+000000r 1                 .incbin "graphics/tiles.chr" ; Assuming this file is 8KB (8192 bytes)
+000000r 1
+000000r 1               .segment "VECTORS"
+000000r 1  rr rr rr rr    .addr NMI, RESET, IRQ ; Define NMI, RESET, and IRQ vectors
+000004r 1  rr rr
+000004r 1

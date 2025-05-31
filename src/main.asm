@@ -1,7 +1,7 @@
 .segment "HEADER"
   .byte "NES", $1A ; Magic string for iNES format
-  .byte $20        ; Number of 16KB PRG-ROM banks (32 banks = 512KB)
-  .byte $04        ; Number of 8KB CHR-ROM banks (4 banks = 32KB)
+  .byte $02        ; Number of 16KB PRG-ROM banks (2 banks = 32KB)
+  .byte $01        ; Number of 8KB CHR-ROM banks (1 bank = 8KB)
   .byte $40        ; Mapper type (4 for MMC3), mirroring (lower nibble for mapper, upper for mirroring/submapper)
   .byte $00        ; Mapper type, other flags (upper nibble of mapper is in previous byte)
   .byte $00, $00, $00, $00, $00, $00, $00, $00 ; Reserved bytes
@@ -166,18 +166,90 @@ VBLANKWAIT2:      ; Wait for vblank again
   BPL VBLANKWAIT2
 
 Palette:
-  LDA $2002             ; Reset PPU, start writing to PPU $2007
+  LDA $2002     ; Read PPUSTATUS to reset PPU address latch
   LDA #$3F
-  STA $2006             ; Write PPU address $3F00
+  STA $2006     ; Point PPUADDR to $3F00 (high byte)
   LDA #$00
-  STA $2006
-  LDA #$0F              ; Black background
+  STA $2006     ; Point PPUADDR to $3F00 (low byte)
+
+  ; Universal Background + BG Palette 0
+  LDA #$0F ; $3F00: Universal Background (Black)
   STA $2007
-  LDA #$10              ; Blue
+  LDA #$11 ; $3F01: BG P0C1 (Dark Blue)
   STA $2007
-  LDA #$20              ; Green
+  LDA #$21 ; $3F02: BG P0C2 (Blue)
   STA $2007
-  LDA #$30              ; Red
+  LDA #$31 ; $3F03: BG P0C3 (Light Blue)
+  STA $2007
+
+  ; BG Palette 1
+  LDA #$0F ; $3F04: Mirror of $3F00 (Black)
+  STA $2007
+  LDA #$17 ; $3F05: BG P1C1 (Dark Red)
+  STA $2007
+  LDA #$27 ; $3F06: BG P1C2 (Red)
+  STA $2007
+  LDA #$37 ; $3F07: BG P1C3 (Light Red)
+  STA $2007
+
+  ; BG Palette 2
+  LDA #$0F ; $3F08: Mirror of $3F00 (Black)
+  STA $2007
+  LDA #$19 ; $3F09: BG P2C1 (Dark Green)
+  STA $2007
+  LDA #$29 ; $3F0A: BG P2C2 (Green)
+  STA $2007
+  LDA #$39 ; $3F0B: BG P2C3 (Light Green)
+  STA $2007
+
+  ; BG Palette 3
+  LDA #$0F ; $3F0C: Mirror of $3F00 (Black)
+  STA $2007
+  LDA #$16 ; $3F0D: BG P3C1 (Dark Yellow/Brown)
+  STA $2007
+  LDA #$26 ; $3F0E: BG P3C2 (Yellow)
+  STA $2007
+  LDA #$36 ; $3F0F: BG P3C3 (Light Yellow)
+  STA $2007
+
+  ; Sprite Palette 0
+  LDA #$0F ; $3F10: SP P0C0 (Transparent - use Universal BG)
+  STA $2007
+  LDA #$11 ; $3F11: SP P0C1 (Dark Blue)
+  STA $2007
+  LDA #$21 ; $3F12: SP P0C2 (Blue)
+  STA $2007
+  LDA #$31 ; $3F13: SP P0C3 (Light Blue)
+  STA $2007
+
+  ; Sprite Palette 1
+  LDA #$0F ; $3F14: SP P1C0 (Transparent - use Universal BG)
+  STA $2007
+  LDA #$17 ; $3F15: SP P1C1 (Dark Red)
+  STA $2007
+  LDA #$27 ; $3F16: SP P1C2 (Red)
+  STA $2007
+  LDA #$37 ; $3F17: SP P1C3 (Light Red)
+  STA $2007
+
+  ; Sprite Palette 2
+  LDA #$0F ; $3F18: SP P2C0 (Transparent - use Universal BG)
+  STA $2007
+  LDA #$19 ; $3F19: SP P2C1 (Dark Green)
+  STA $2007
+  LDA #$29 ; $3F1A: SP P2C2 (Green)
+  STA $2007
+  LDA #$39 ; $3F1B: SP P2C3 (Light Green)
+  STA $2007
+
+  ; Sprite Palette 3
+  LDA #$0F ; $3F1C: SP P3C0 (Transparent - use Universal BG)
+  STA $2007
+  LDA #$16 ; $3F1D: SP P3C1 (Dark Yellow/Brown)
+  STA $2007
+  LDA #$26 ; $3F1E: SP P3C2 (Yellow)
+  STA $2007
+  LDA #$36 ; $3F1F: SP P3C3 (Light Yellow)
   STA $2007
 
 .segment "CODE" ; Or PRG_SWAP_A as per nes.cfg for main code
@@ -686,6 +758,9 @@ IrqDone:
   TAX             ; Transfer A to X
   PLA             ; Pull Accumulator
   RTI             ; Return from Interrupt
+
+.segment "CHRDATA"
+  .incbin "graphics/tiles.chr" ; Assuming this file is 8KB (8192 bytes)
 
 .segment "VECTORS"
   .addr NMI, RESET, IRQ ; Define NMI, RESET, and IRQ vectors
