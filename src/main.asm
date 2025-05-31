@@ -70,7 +70,8 @@ sprite_eff_scroll_low: .res 1
 sprite_eff_scroll_high: .res 1
 sprite_screen_x: .res 1
 oam_index: .res 1 ; To keep track of current OAM buffer offset
-last_beep_scroll_high: .res 1 ; For sound trigger logic
+last_coin_scroll_high: .res 1 ; For coin sound trigger logic
+last_jump_scroll_high: .res 1 ; For jump sound trigger logic
 
 .segment "RODATA"
 NUM_FOREGROUND_SPRITES = 2
@@ -104,6 +105,50 @@ SampleNametable_End: ; Label to mark end for size calculation if needed by loade
 ppu_ctrl_value_default: .byte %10001000 ; BG $0000, Sprites $1000, NMI on
 ppu_mask_value_default: .byte %00011110 ; Show BG/Sprites, Show left column BG/Sprites
 
+; Sound Effect Data Format:
+; Each sound effect consists of 4 bytes:
+; Byte 0: Control Register ($4000/$4004) - DDLC VVVV (Duty, EnvLoop/LenCtrHalt, ConstVol, Vol/EnvPeriod)
+; Byte 1: Sweep Register ($4001/$4005) - EPPP NSSS (Sweep enable, Period, Negate, Shift)
+; Byte 2: Timer Low ($4002/$4006) - TTTT TTTT
+; Byte 3: Timer High / Length Counter ($4003/$4007) - LLLL LTTT (Length counter load, Timer high 3 bits)
+
+; SoundEffect_Jump: A short, rising pitch sound
+; - Control: Duty 25%, Length Counter Halt OFF (use length), Constant Volume ON, Volume 12
+; - Sweep: Enabled, Period 3, Negate ON (pitch increases), Shift 2
+; - Timer Low: $A0 (initial low pitch)
+; - Timer High / Length: Length Counter index for short duration (e.g., $08 for table value 16), Timer High $00
+SoundEffect_Jump:
+  .byte %01011100  ; $4000: Duty 25% (01), LC Halt OFF (0), Const Vol ON (1), Vol 12 (1100)
+  .byte %10110010  ; $4001: Sweep ON (1), Period 3 (011), Negate ON (1), Shift 2 (010)
+  .byte $A0        ; $4002: Timer Low for initial pitch
+  .byte %01000000  ; $4003: Length Counter load $08 (table value 16 -> ~66ms), Timer High $0 (for $0A0)
+
+; SoundEffect_Coin: A short, high-pitched blip
+; - Control: Duty 50%, Length Counter Halt OFF, Constant Volume ON, Volume 10
+; - Sweep: Disabled
+; - Timer Low: $50 (high pitch)
+; - Timer High / Length: Length Counter index for very short duration (e.g., $04 for table value 10), Timer High $0
+SoundEffect_Coin:
+  .byte %10011010  ; $4000: Duty 50% (10), LC Halt OFF (0), Const Vol ON (1), Vol 10 (1010)
+  .byte %00001000  ; $4001: Sweep OFF (0), Period 0, Negate OFF, Shift 0 (but sweep off)
+  .byte $50        ; $4002: Timer Low for high pitch
+  .byte %00100000  ; $4003: Length Counter load $04 (table value 10 -> ~40ms), Timer High $0 (for $050)
+
+SoundEffectsEnd:
+
+SOUND_EFFECT_DATA_SIZE = 4
+
+; SoundEffectIDs:
+SFX_JUMP_ID = 0
+SFX_COIN_ID = 1
+; Add more IDs here...
+TOTAL_SOUND_EFFECTS = 2 ; Number of defined sound effects
+
+SoundEffectDataTable:
+  .addr SoundEffect_Jump
+  .addr SoundEffect_Coin
+SoundEffectDataTable_End:
+
 .segment "OAM_DATA" ; Mapped to $0200 in nes.cfg
 oam_ram_buffer: .res 256
 
@@ -121,7 +166,7 @@ RESET:
   JSR LoadSmallNametable ; Load initial nametable data
 
   ; Initialize APU
-  LDA #%00000001    ; Enable Pulse1 channel only
+  LDA #%00000001    ; Enable Pulse1 channel only (Pulse2, Triangle, Noise, DMC disabled)
   STA APU_SND_CHN_CTRL
   LDA #%01000000    ; Mode 0: 4-step sequence, APU IRQ disable
   STA APU_FRAME_CNT
@@ -142,7 +187,8 @@ RESET:
   STA PrevNMICount
   STA fine_x_scroll_value ; Initialize fine_x_scroll to 0
   LDA #$FF
-  STA last_beep_scroll_high ; Initialize for sound trigger
+  STA last_coin_scroll_high ; Initialize for coin sound trigger
+  STA last_jump_scroll_high ; Initialize for jump sound trigger
 
 VBLANKWAIT1:       ; Wait for vblank to make sure PPU is ready
   BIT $2002
@@ -273,21 +319,39 @@ SkipIncHigh:
   ; --- Update Sprite Logic ---
   JSR UpdateSprites
 
-  ; --- Example Sound Trigger ---
+  ; --- Coin Sound Trigger ---
   LDA main_scroll_x_high
-  CMP #10
-  BNE SkipBeep
+  CMP #10 ; Trigger at scroll position 10
+  BNE SkipCoinSound
   LDA main_scroll_x_low ; Check low byte too for more precise trigger
-  BNE SkipBeep
-    ; Check if already beeped for this specific high scroll value
-    LDA last_beep_scroll_high
+  BNE SkipCoinSound
+    ; Check if already played for this specific high scroll value
+    LDA last_coin_scroll_high
     CMP main_scroll_x_high
-    BEQ SkipBeep ; Already beeped
+    BEQ SkipCoinSound ; Already played
 
-    JSR PlayBeepSound
+    LDA #SFX_COIN_ID
+    JSR PlaySoundEffect
     LDA main_scroll_x_high
-    STA last_beep_scroll_high ; Remember this scroll value
-SkipBeep:
+    STA last_coin_scroll_high ; Remember this scroll value
+SkipCoinSound:
+
+  ; --- Trigger for Jump Sound ---
+  LDA main_scroll_x_high
+  CMP #20 ; Trigger at a different scroll position
+  BNE SkipJumpSound
+  LDA main_scroll_x_low ; Check low byte too for more precise trigger
+  BNE SkipJumpSound
+  ; Check if already played for this specific high scroll value
+  LDA last_jump_scroll_high
+  CMP main_scroll_x_high
+  BEQ SkipJumpSound ; Already played
+
+  LDA #SFX_JUMP_ID
+  JSR PlaySoundEffect
+  LDA main_scroll_x_high
+  STA last_jump_scroll_high ; Remember this scroll value
+SkipJumpSound:
 
   ; --- Other game logic would go here (player updates, enemy AI, collisions) ---
 
@@ -373,6 +437,54 @@ UpdateLayerScrolls:
   TAX
   PLA ; Restore A
   RTS
+
+;--------------------------------------------------------------------------------
+; PlaySoundEffect
+; Plays a sound effect based on the ID passed in the A register.
+; Input: A = Sound Effect ID (0 for Jump, 1 for Coin, etc.)
+; Uses Pulse Channel 1 ($4000-$4003).
+; Modifies: A, X, Y, APU registers.
+;--------------------------------------------------------------------------------
+PlaySoundEffect:
+  PHA       ; Preserve A (Sound ID)
+
+  ; Multiply Sound ID by 2 (since addresses are 2 bytes in the table)
+  ASL A     ; A = Sound_ID * 2
+  TAX       ; X = Sound_ID * 2 (use X as index into the data table)
+
+  ; Get the base address of the sound effect data
+  LDA SoundEffectDataTable, X    ; Load low byte of address
+  STA temp_low                   ; Store in a temporary ZP location
+  INX
+  LDA SoundEffectDataTable, X    ; Load high byte of address
+  STA temp_high                  ; Store in a temporary ZP location
+
+  ; Now temp_low:temp_high points to the sound effect data.
+  ; Use Y as an offset to read the 4 bytes of data.
+  LDY #0
+
+  ; Fetch and write byte 0 (Control Register) to $4000
+  LDA (temp_low), Y
+  STA APU_PULSE1_CTRL
+  INY
+
+  ; Fetch and write byte 1 (Sweep Register) to $4001
+  LDA (temp_low), Y
+  STA APU_PULSE1_SWEEP
+  INY
+
+  ; Fetch and write byte 2 (Timer Low) to $4002
+  LDA (temp_low), Y
+  STA APU_PULSE1_TIMERL
+  INY
+
+  ; Fetch and write byte 3 (Timer High / Length) to $4003
+  ; This write also triggers the sound on the channel.
+  LDA (temp_low), Y
+  STA APU_PULSE1_TIMERH
+
+  PLA       ; Restore A
+  RTS       ; Return from subroutine
 
 PlayBeepSound:
   PHA
