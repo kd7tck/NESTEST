@@ -1,0 +1,98 @@
+ca65 V2.18 - Ubuntu 2.19-1
+Main file   : src/sound.asm
+Current file: src/sound.asm
+
+000000r 1               ; APU Register Definitions
+000000r 1               .global APU_PULSE1_CTRL, APU_PULSE1_SWEEP, APU_PULSE1_TIMERL, APU_PULSE1_TIMERH
+000000r 1               .global APU_SND_CHN_CTRL, APU_FRAME_CNT
+000000r 1
+000000r 1               ; Imported zero-page variables from main.asm
+000000r 1               .importzp temp_low, temp_high
+000000r 1
+000000r 1               APU_PULSE1_CTRL   = $4000
+000000r 1               APU_PULSE1_SWEEP  = $4001
+000000r 1               APU_PULSE1_TIMERL = $4002
+000000r 1               APU_PULSE1_TIMERH = $4003
+000000r 1               APU_SND_CHN_CTRL  = $4015
+000000r 1               APU_FRAME_CNT     = $4017
+000000r 1
+000000r 1               .segment "RODATA"
+000000r 1               .global SoundEffect_Jump, SoundEffect_Coin, SoundEffectsEnd
+000000r 1               .global SOUND_EFFECT_DATA_SIZE
+000000r 1               .global SFX_JUMP_ID, SFX_COIN_ID, TOTAL_SOUND_EFFECTS
+000000r 1               .global SoundEffectDataTable, SoundEffectDataTable_End
+000000r 1
+000000r 1               SoundEffect_Jump:
+000000r 1  5C             .byte %01011100
+000001r 1  B2             .byte %10110010
+000002r 1  A0             .byte $A0
+000003r 1  40             .byte %01000000
+000004r 1
+000004r 1               SoundEffect_Coin:
+000004r 1  9A             .byte %10011010
+000005r 1  08             .byte %00001000
+000006r 1  50             .byte $50
+000007r 1  20             .byte %00100000
+000008r 1
+000008r 1               SoundEffectsEnd:
+000008r 1
+000008r 1               SOUND_EFFECT_DATA_SIZE = 4
+000008r 1
+000008r 1               SFX_JUMP_ID = 0
+000008r 1               SFX_COIN_ID = 1
+000008r 1               TOTAL_SOUND_EFFECTS = 2
+000008r 1
+000008r 1               SoundEffectDataTable:
+000008r 1  rr rr          .addr SoundEffect_Jump
+00000Ar 1  rr rr          .addr SoundEffect_Coin
+00000Cr 1               SoundEffectDataTable_End:
+00000Cr 1
+00000Cr 1               .segment "CODE"
+000000r 1               .global InitializeSound
+000000r 1               InitializeSound:
+000000r 1  A9 01          LDA #%00000001    ; Enable Pulse1 channel only
+000002r 1  8D 15 40       STA APU_SND_CHN_CTRL
+000005r 1  A9 40          LDA #%01000000    ; Mode 0: 4-step sequence, APU IRQ disable
+000007r 1  8D 17 40       STA APU_FRAME_CNT
+00000Ar 1  60             RTS
+00000Br 1
+00000Br 1               .global PlaySoundEffect
+00000Br 1               PlaySoundEffect:
+00000Br 1  48             PHA
+00000Cr 1                 ; temp_low and temp_high are now imported
+00000Cr 1  0A             ASL A
+00000Dr 1  AA             TAX
+00000Er 1  BD rr rr       LDA SoundEffectDataTable, X
+000011r 1  85 rr          STA temp_low
+000013r 1  E8             INX
+000014r 1  BD rr rr       LDA SoundEffectDataTable, X
+000017r 1  85 rr          STA temp_high
+000019r 1  A0 00          LDY #0
+00001Br 1  B1 rr          LDA (temp_low), Y
+00001Dr 1  8D 00 40       STA APU_PULSE1_CTRL
+000020r 1  C8             INY
+000021r 1  B1 rr          LDA (temp_low), Y
+000023r 1  8D 01 40       STA APU_PULSE1_SWEEP
+000026r 1  C8             INY
+000027r 1  B1 rr          LDA (temp_low), Y
+000029r 1  8D 02 40       STA APU_PULSE1_TIMERL
+00002Cr 1  C8             INY
+00002Dr 1  B1 rr          LDA (temp_low), Y
+00002Fr 1  8D 03 40       STA APU_PULSE1_TIMERH
+000032r 1  68             PLA
+000033r 1  60             RTS
+000034r 1
+000034r 1               .global PlayBeepSound
+000034r 1               PlayBeepSound:
+000034r 1  48             PHA
+000035r 1  A9 5F          LDA #%01011111
+000037r 1  8D 00 40       STA APU_PULSE1_CTRL
+00003Ar 1  A9 08          LDA #%00001000
+00003Cr 1  8D 01 40       STA APU_PULSE1_SWEEP
+00003Fr 1  A9 A8          LDA #$A8
+000041r 1  8D 02 40       STA APU_PULSE1_TIMERL
+000044r 1  A9 11          LDA #%00010001
+000046r 1  8D 03 40       STA APU_PULSE1_TIMERH
+000049r 1  68             PLA
+00004Ar 1  60             RTS
+00004Ar 1

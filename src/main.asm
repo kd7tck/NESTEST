@@ -154,7 +154,7 @@ SkipIncHigh:
 
   ; --- Coin Sound Trigger ---
   LDA main_scroll_x_high
-  CMP #10 ; Trigger at scroll position 10
+  CMP #10 ; Test with 10
   BNE SkipCoinSound
   LDA main_scroll_x_low ; Check low byte too for more precise trigger
   BNE SkipCoinSound
@@ -163,7 +163,7 @@ SkipIncHigh:
     CMP main_scroll_x_high
     BEQ SkipCoinSound ; Already played
 
-    LDA #SFX_COIN_ID
+    LDA #1 ; Originally #SFX_COIN_ID
     JSR PlaySoundEffect
     LDA main_scroll_x_high
     STA last_coin_scroll_high ; Remember this scroll value
@@ -171,7 +171,7 @@ SkipCoinSound:
 
   ; --- Trigger for Jump Sound ---
   LDA main_scroll_x_high
-  CMP #20 ; Trigger at a different scroll position
+  CMP #$14 ; Trigger at a different scroll position (decimal 20)
   BNE SkipJumpSound
   LDA main_scroll_x_low ; Check low byte too for more precise trigger
   BNE SkipJumpSound
@@ -180,7 +180,7 @@ SkipCoinSound:
   CMP main_scroll_x_high
   BEQ SkipJumpSound ; Already played
 
-  LDA #SFX_JUMP_ID
+  LDA #0 ; Originally #SFX_JUMP_ID
   JSR PlaySoundEffect
   LDA main_scroll_x_high
   STA last_jump_scroll_high ; Remember this scroll value

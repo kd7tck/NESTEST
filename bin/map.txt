@@ -1,13 +1,20 @@
 Modules list:
 -------------
 main.o:
-    CODE              Offs=000000  Size=00026B  Align=00001  Fill=0000
-    RODATA            Offs=000000  Size=00006F  Align=00001  Fill=0000
-    ZEROPAGE          Offs=000000  Size=000017  Align=00001  Fill=0000
+    CODE              Offs=000000  Size=00012E  Align=00001  Fill=0000
+    RODATA            Offs=000000  Size=000002  Align=00001  Fill=0000
+    ZEROPAGE          Offs=000000  Size=00000D  Align=00001  Fill=0000
     HEADER            Offs=000000  Size=000010  Align=00001  Fill=0000
-    OAM_DATA          Offs=000000  Size=000100  Align=00001  Fill=0000
-    STARTUP           Offs=000000  Size=00010E  Align=00001  Fill=0000
+    STARTUP           Offs=000000  Size=00005F  Align=00001  Fill=0000
     VECTORS           Offs=000000  Size=000006  Align=00001  Fill=0000
+graphics.o:
+    CODE              Offs=00012E  Size=00015C  Align=00001  Fill=0000
+    RODATA            Offs=000002  Size=00008D  Align=00001  Fill=0000
+    ZEROPAGE          Offs=00000D  Size=00000B  Align=00001  Fill=0000
+    OAM_DATA          Offs=000000  Size=000100  Align=00001  Fill=0000
+sound.o:
+    CODE              Offs=00028A  Size=00004B  Align=00001  Fill=0000
+    RODATA            Offs=00008F  Size=00000C  Align=00001  Fill=0000
 
 
 Segment list:
@@ -15,23 +22,115 @@ Segment list:
 Name                   Start     End    Size  Align
 ----------------------------------------------------
 HEADER                000000  00000F  000010  00001
-ZEROPAGE              000000  000016  000017  00001
+ZEROPAGE              000000  000017  000018  00001
 OAM_DATA              000200  0002FF  000100  00001
-CODE                  008000  00826A  00026B  00001
-RODATA                00826B  0082D9  00006F  00001
-STARTUP               00E000  00E10D  00010E  00001
+CODE                  008000  0082D4  0002D5  00001
+RODATA                0082D5  00836F  00009B  00001
+STARTUP               00E000  00E05E  00005F  00001
 VECTORS               00FFFA  00FFFF  000006  00001
 
 
 Exports list by name:
 ---------------------
+APU_FRAME_CNT             004017 REA    InitializeSound           00828A RLA
+LoadPalette               00812E RLA    LoadSmallNametable        008149 RLA
+OAMDMA                    004014 REA    PPUCTRL                   002000 REA
+PPUMASK                   002001 REA    PPUSCROLL                 002005 REA
+PPUSTATUS                 002002 REA    PlaySoundEffect           008295 RLA
+UpdateLayerScrolls        008247 RLA    UpdateSprites             00816A RLA
+fine_x_scroll_value       000013 RLZ    layer1_scroll_x           00000D RLZ
+layer1_scroll_y           00000E RLZ    layer2_scroll_x           00000F RLZ
+layer2_scroll_y           000010 RLZ    layer3_scroll_x           000011 RLZ
+layer3_scroll_y           000012 RLZ    main_scroll_x_high        000002 RLZ
+main_scroll_x_low         000001 RLZ    oam_ram_buffer            000200 RLA
+player_world_x_high       000004 RLZ    player_world_y_high       000006 RLZ
+ppu_ctrl_value_default    008362 RLA    ppu_mask_value_default    008363 RLA
+sprite0_world_x_high      0082D5 RLA    sprite1_world_x_high      0082D6 RLA
+temp_high                 000008 RLZ    temp_low                  000007 RLZ
 
 
 
 Exports list by value:
 ----------------------
+main_scroll_x_low         000001 RLZ    main_scroll_x_high        000002 RLZ
+player_world_x_high       000004 RLZ    player_world_y_high       000006 RLZ
+temp_low                  000007 RLZ    temp_high                 000008 RLZ
+layer1_scroll_x           00000D RLZ    layer1_scroll_y           00000E RLZ
+layer2_scroll_x           00000F RLZ    layer2_scroll_y           000010 RLZ
+layer3_scroll_x           000011 RLZ    layer3_scroll_y           000012 RLZ
+fine_x_scroll_value       000013 RLZ    oam_ram_buffer            000200 RLA
+PPUCTRL                   002000 REA    PPUMASK                   002001 REA
+PPUSTATUS                 002002 REA    PPUSCROLL                 002005 REA
+OAMDMA                    004014 REA    APU_FRAME_CNT             004017 REA
+LoadPalette               00812E RLA    LoadSmallNametable        008149 RLA
+UpdateSprites             00816A RLA    UpdateLayerScrolls        008247 RLA
+InitializeSound           00828A RLA    PlaySoundEffect           008295 RLA
+sprite0_world_x_high      0082D5 RLA    sprite1_world_x_high      0082D6 RLA
+ppu_ctrl_value_default    008362 RLA    ppu_mask_value_default    008363 RLA
 
 
 
 Imports list:
 -------------
+APU_FRAME_CNT (sound.o):
+    main.o                    src/main.asm(21)
+InitializeSound (sound.o):
+    main.o                    src/main.asm(29)
+LoadPalette (graphics.o):
+    main.o                    src/main.asm(24)
+LoadSmallNametable (graphics.o):
+    main.o                    src/main.asm(24)
+OAMDMA (graphics.o):
+    main.o                    src/main.asm(18)
+PPUCTRL (graphics.o):
+    main.o                    src/main.asm(18)
+PPUMASK (graphics.o):
+    main.o                    src/main.asm(18)
+PPUSCROLL (graphics.o):
+    main.o                    src/main.asm(18)
+PPUSTATUS (graphics.o):
+    main.o                    src/main.asm(18)
+PlaySoundEffect (sound.o):
+    main.o                    src/main.asm(29)
+UpdateLayerScrolls (graphics.o):
+    main.o                    src/main.asm(24)
+UpdateSprites (graphics.o):
+    main.o                    src/main.asm(24)
+fine_x_scroll_value (graphics.o):
+    main.o                    src/main.asm(39)
+layer1_scroll_x (graphics.o):
+    main.o                    src/main.asm(38)
+layer1_scroll_y (graphics.o):
+    main.o                    src/main.asm(38)
+layer2_scroll_x (graphics.o):
+    main.o                    src/main.asm(38)
+layer2_scroll_y (graphics.o):
+    main.o                    src/main.asm(38)
+layer3_scroll_x (graphics.o):
+    main.o                    src/main.asm(38)
+layer3_scroll_y (graphics.o):
+    main.o                    src/main.asm(38)
+main_scroll_x_high (main.o):
+    graphics.o                src/graphics.asm(14)
+main_scroll_x_low (main.o):
+    graphics.o                src/graphics.asm(14)
+oam_ram_buffer (graphics.o):
+    main.o                    src/main.asm(26)
+player_world_x_high (main.o):
+    graphics.o                src/graphics.asm(15)
+player_world_y_high (main.o):
+    graphics.o                src/graphics.asm(15)
+ppu_ctrl_value_default (graphics.o):
+    main.o                    src/main.asm(25)
+ppu_mask_value_default (graphics.o):
+    main.o                    src/main.asm(25)
+sprite0_world_x_high (main.o):
+    graphics.o                src/graphics.asm(17)
+sprite1_world_x_high (main.o):
+    graphics.o                src/graphics.asm(17)
+temp_high (main.o):
+    sound.o                   src/sound.asm(6)
+    graphics.o                src/graphics.asm(16)
+temp_low (main.o):
+    sound.o                   src/sound.asm(6)
+    graphics.o                src/graphics.asm(16)
