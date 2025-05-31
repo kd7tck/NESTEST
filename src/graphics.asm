@@ -10,6 +10,12 @@ PPUADDR   = $2006
 PPUDATA   = $2007
 OAMDMA    = $4014
 
+; Imported from main.asm
+.importzp main_scroll_x_low, main_scroll_x_high
+.importzp player_world_x_high, player_world_y_high
+.importzp temp_low, temp_high
+.import sprite0_world_x_high, sprite1_world_x_high
+
 .segment "ZEROPAGE"
 .global layer1_scroll_x, layer1_scroll_y, layer2_scroll_x, layer2_scroll_y, layer3_scroll_x, layer3_scroll_y
 .global fine_x_scroll_value
