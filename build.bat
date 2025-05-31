@@ -16,9 +16,11 @@ IF NOT EXIST %OUTPUT_DIR% (
 REM Assemble
 echo Assembling...
 %CA65_PATH% %SRC_DIR%/main.asm -o %OUTPUT_DIR%/main.o -g --listing %OUTPUT_DIR%/main.lst
+%CA65_PATH% %SRC_DIR%/graphics.asm -o %OUTPUT_DIR%/graphics.o -g --listing %OUTPUT_DIR%/graphics.lst
+%CA65_PATH% %SRC_DIR%/sound.asm -o %OUTPUT_DIR%/sound.o -g --listing %OUTPUT_DIR%/sound.lst
 
 REM Link
 echo Linking...
-%LD65_PATH% -C %SRC_DIR%/nes.cfg -o %OUTPUT_DIR%/%ROM_NAME% %OUTPUT_DIR%/main.o --mapfile %OUTPUT_DIR%/map.txt
+%LD65_PATH% -C %SRC_DIR%/nes.cfg -o %OUTPUT_DIR%/%ROM_NAME% %OUTPUT_DIR%/main.o %OUTPUT_DIR%/graphics.o %OUTPUT_DIR%/sound.o --mapfile %OUTPUT_DIR%/map.txt
 
 echo Build complete: %OUTPUT_DIR%/%ROM_NAME%
